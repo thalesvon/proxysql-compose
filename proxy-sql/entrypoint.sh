@@ -1,14 +1,14 @@
 #!/bin/bash
 set -e
 
-echo 'Startin ProxySQL'
+echo 'Startin ProxySQL $($WRITER_ENDPOINT)'
 service proxysql start
 
 cat <<EOF > /proxy-sql.sql
 delete from mysql_servers where hostgroup_id in (10,20);
 delete from mysql_replication_hostgroups where writer_hostgroup=10;
 INSERT INTO mysql_servers (hostname,hostgroup_id,port,weight,max_connections) VALUES ('$WRITER_ENDPOINT',10,3306,1000,2000);
-INSERT INTO mysql_servers (hostname,hostgroup_id,port,weight,max_connections) VALUES ('$READER_ENDPOINT',20,3306,1000,2000);
+INSERT INTO mysql_servers (hostname,hostgroup_id,port,weight,max_connections) VALUES ('$READER_ENDPOINT',20,3307,1000,2000);
 INSERT INTO mysql_replication_hostgroups (writer_hostgroup,reader_hostgroup,comment,check_type) VALUES (10,20,'aws-aurora','innodb_read_only');
 LOAD MYSQL SERVERS TO RUNTIME; SAVE MYSQL SERVERS TO DISK;
 
@@ -35,4 +35,3 @@ mysql -uadmin -padmin -h 127.0.0.1 -P6032 main < /proxy-sql.sql
 
 echo 'Creating Monitoring user'
 #mysql -u root -pmysql -h 127.0.0.1 -P6033 -e "CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED BY 'mysql';"
-exec proxysql -f $CMDARG
