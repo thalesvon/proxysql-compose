@@ -1,0 +1,30 @@
+version: '3'
+networks:
+  poc:
+services:
+  write-sql:
+    networks:
+      - poc
+    image: mysql:5.7.26
+    volumes:
+      - ./sql/create-db.sql:/docker-entrypoint-initdb.d/001.sql
+    environment:
+      - MYSQL_USER=root
+      - MYSQL_ROOT_PASSWORD=mysql
+    ports:
+      - 3306:3306
+    command: mysqld --lower_case_table_names=1 --skip-ssl --character_set_server=utf8 --sql-mode=""
+  read-sql:
+    networks:
+      - poc
+    image: mysql:5.7.26
+    volumes:
+      - ./sql/create-db.sql:/docker-entrypoint-initdb.d/001.sql
+    environment:
+      - MYSQL_USER=root
+      - MYSQL_ROOT_PASSWORD=mysql
+    ports:
+      - 3307:3306
+    command: mysqld --lower_case_table_names=1 --skip-ssl --character_set_server=utf8 --sql-mode="" 
+
+
