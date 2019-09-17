@@ -3,28 +3,25 @@ networks:
   poc:
 services:
   proxy-sql:
-    build: ./proxy-sql
+    image: proxysql/proxysql:latest
     volumes:
-      - ./proxy-sql:/tmp
+      - ./proxy-sql/proxysql.cnf:/etc/proxysql.cnf
+      - ./proxy-sql/config.sql:/tmp/config.sql
     networks:
       - poc
-    environment: 
-      - START_SLEEP=10
-      - DB_USER=root
-      - DB_PASSWORD=mysql
-      - DB_SCHEMA_NAME=example-db
-      - READER_ENDPOINT=read-sql:3307
-      - WRITER_ENDPOINT=write-sql:3306
     ports: 
       - 6033:6033
       - 6032:6032
-      - 6080:6080
+    depends_on:
+      - write-sql
+      - read-sql
   write-sql:
     networks:
       - poc
     image: mysql:5.7.26
     volumes:
       - ./sql/create-db.sql:/docker-entrypoint-initdb.d/001.sql
+      - ./sql/write-sql:/etc/mysql/conf.d
     environment:
       - MYSQL_USER=root
       - MYSQL_ROOT_PASSWORD=mysql
@@ -37,6 +34,7 @@ services:
     image: mysql:5.7.26
     volumes:
       - ./sql/create-db.sql:/docker-entrypoint-initdb.d/001.sql
+      - ./sql/read-sql:/etc/mysql/conf.d
     environment:
       - MYSQL_USER=root
       - MYSQL_ROOT_PASSWORD=mysql
