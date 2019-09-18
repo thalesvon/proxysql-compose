@@ -2,7 +2,7 @@ DELETE FROM mysql_servers;
 INSERT INTO mysql_servers (hostgroup_id,hostname,port,max_replication_lag) VALUES (0,'write-sql',3306,1);
 INSERT INTO mysql_servers (hostgroup_id,hostname,port,max_replication_lag) VALUES (1,'read-sql',3307,1);
 DELETE FROM mysql_replication_hostgroups;
-INSERT INTO mysql_replication_hostgroups (writer_hostgroup,reader_hostgroup) VALUES (0,1);
+INSERT INTO mysql_replication_hostgroups (writer_hostgroup,reader_hostgroup,check_type) VALUES (0,1,'innodb_read_only');
 LOAD MYSQL SERVERS TO RUNTIME;
 SAVE MYSQL SERVERS TO DISK;
 
