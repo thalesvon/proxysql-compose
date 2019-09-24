@@ -6,15 +6,12 @@ services:
     image: proxysql/proxysql:latest
     volumes:
       - ./proxy-sql/proxysql.cnf:/etc/proxysql.cnf
-      - ./proxy-sql/config.sql:/tmp/config.sql
+      - ./proxy-sql/${ENV:-local}-config.sql:/tmp/config.sql
     networks:
       - poc
     ports: 
       - 6033:6033
       - 6032:6032
-    depends_on:
-      - write-sql
-      - read-sql
   write-sql:
     networks:
       - poc
