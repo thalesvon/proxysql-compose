@@ -29,3 +29,14 @@ function aws-check() {
 
     fi
 }
+
+
+declare -A LOG_LEVELS
+LOG_LEVELS=([0]="emerg" [1]="alert" [2]="crit" [3]="err" [4]="warning" [5]="notice" [6]="info" [7]="debug")
+function logger () {
+  local LEVEL=${1}
+  shift
+  if [ ${__VERBOSE} -ge ${LEVEL} ]; then
+    printf "$@"
+  fi
+}
