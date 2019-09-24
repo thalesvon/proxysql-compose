@@ -1,0 +1,8 @@
+#Ignore all dot files
+.*
+
+#Except
+!.gitignore
+
+#Config file with sensitiva data, only sample should be in git
+rds-config.sql
