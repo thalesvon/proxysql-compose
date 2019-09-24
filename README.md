@@ -1,8 +1,7 @@
 # Start
 
 ```
-$ docker-compose up -d
-$ mysql -uradmin -pradmin -h127.0.0.1 -P6032 < proxy-sql/config.sql
+$ ./init-compose.bash local | rds
 ```
 
 
