@@ -5,7 +5,7 @@
 
 printf "$BRIGHT"
 printf "##################################################################################\n"
-printf "# Stopping ProxySQL for $ENV environment!                                        #\n"
+printf "# Stopping ProxySQL environment!                                                 #\n"
 printf "##################################################################################\n"
 printf "$NORMAL"
 
