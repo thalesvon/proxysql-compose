@@ -1,6 +1,6 @@
 #!/bin/bash
 
-. colors
+. support
 
 
 printf "$BRIGHT"
