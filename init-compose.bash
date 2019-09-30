@@ -3,20 +3,20 @@ set -e
 
 . support
 
-ENV=$1
+DST_ENV=$1
 VAR=$2
 __VERBOSE=${VAR:-6}
 
 logger 6 "$BRIGHT"
 logger 6 "##################################################################################\n"
-logger 6 "# Started ProxySQL for $ENV environment!                                         #\n"
+logger 6 "# Started ProxySQL for $DST_ENV environment!                                         #\n"
 logger 6 "##################################################################################\n"
 logger 6 "$NORMAL"
 
 
 
-if [ "$ENV" = "local" ]; then
-    logger 6 "$POWDER_BLUE Running Stack for $ENV$POWDER_BLUE\n"
+if [ "$DST_ENV" = "local" ]; then
+    logger 6 "$POWDER_BLUE Running Stack for $DST_ENV$POWDER_BLUE\n"
     docker-compose up -d
     logger 6 "$YELLOW Waiting write-sql to be created"
     RC=1
@@ -30,9 +30,9 @@ if [ "$ENV" = "local" ]; then
     logger 6 "\n"
     mysql -h 127.0.0.1 -uradmin -pradmin -P 6032 < proxy-sql/local-config.sql
 
-elif [ "$ENV" = "rds" ];then 
+elif [ "$DST_ENV" = "rds" ];then 
     aws-check
-    logger 6 "$POWDER_BLUE Running Stack for $ENV$POWDER_BLUE\n"
+    logger 6 "$POWDER_BLUE Running Stack for $DST_ENV$POWDER_BLUE\n"
     SAMPLE_CONFIG='proxy-sql/rds-sample-config.sql'
     CONFIG_FILE='proxy-sql/rds-config.sql'
     DB_CLUSTER='boomcredit-dev-cluster'
@@ -52,12 +52,25 @@ elif [ "$ENV" = "rds" ];then
         -e 's@{{ sql:user }}@'"$DB_USER"'@g' \
         -e 's@{{ sql:password }}@'"$DB_PASSWORD"'@g' $SAMPLE_CONFIG > $CONFIG_FILE
     
-    #docker-compose evaluates ENV=rds to select proper config file, if ENV is empty the default is local-config.sql
-    export ENV
-    docker-compose up --build --no-start proxy-sql
-    logger 7 "$(docker commit -m="ProxySQL for RDS with configuration from $CONFIG_FILE" $(docker ps -a -q -f name=proxysql_proxy-sql_1) boomcredit/proxy-sql:latest)\n"
+    #docker-compose evaluates DST_ENV=rds to select proper config file, if DST_ENV is empty the default is local-config.sql
+    export DST_ENV
+    docker-compose up --build proxy-sql
+    mysql -h 127.0.0.1 -uradmin -pradmin -P 6032 < $CONFIG_FILE
+    docker-compose down
+    logger 7 "$(docker commit -m="ProxySQL for RDS with configuration from $CONFIG_FILE" $(docker ps -a -q -f name=proxy-sql) boomcredit/proxy-sql:latest)\n"
     
     logger 6 "$GREEN Docker image boomcredit/proxy-sql:latest build locally$GREEN\n"
+
+    logger 6 "$POWDER_BLUE Login to AWS ECR $POWDER_BLUE"
+    $(aws ecr get-login --no-include-email)
+
+    logger 6 "$POWDER_BLUE Pushing image to registry $POWDER_BLUE"
+    docker tag boomcredit/proxy-sql:latest 212568053769.dkr.ecr.us-east-1.amazonaws.com/boomcredit/proxy-sql:latest
+    docker push 212568053769.dkr.ecr.us-east-1.amazonaws.com/boomcredit/proxy-sql:latest
+
+    #STACK_NAME='demo'
+    #STACK_ARN=$(aws cloudformation update-stack --stack-name demo --template-body file://cloudformation/ecs-cluster.yml --capabilities CAPABILITY_IAM --parameters ParameterKey=ProxySQLContainerImage,ParameterValue=212568053769.dkr.ecr.us-east-1.amazonaws.com/boomcredit/proxy-sql:latest --output text)
+    #logger 6 "$POWDER_BLUE Creating stack $STCK_NAME, ARN= $STACK_ARN$POWDER_BLUE\n"
 
 
 else

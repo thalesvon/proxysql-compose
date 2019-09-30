@@ -3,16 +3,16 @@ networks:
   poc:
 services:
   proxy-sql:
-    image: proxysql/proxysql:latest
-    volumes:
-      - ./proxy-sql/proxysql.cnf:/etc/proxysql.cnf
-      - ./proxy-sql/${ENV:-local}-config.sql:/tmp/config.sql
+    container_name: proxy-sql
+    build: ./proxy-sql
     networks:
       - poc
     ports: 
       - 6033:6033
       - 6032:6032
+    entrypoint: 'proxysql -f -D /var/lib/proxysql -c /tmp/proxysql.cnf'
   write-sql:
+    container_name: write-sql
     networks:
       - poc
     image: mysql:5.7.26
@@ -26,6 +26,7 @@ services:
       - 3306:3306
     command: mysqld --lower_case_table_names=1 --skip-ssl --character_set_server=utf8 --sql-mode=""
   read-sql:
+    container_name: read-sql
     networks:
       - poc
     image: mysql:5.7.26
