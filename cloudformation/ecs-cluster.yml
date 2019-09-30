@@ -1,0 +1,581 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: ECS cluster running containers launched on EC2 instances in a private subnet.
+Parameters:
+  KeyName:
+    Type: String
+    Description: KeyName
+    Default: 'boomcredit-qa-cluster'
+  EnvironmentName:
+    Type: String
+    Default: demo
+    Description: "A friendly environment name that will be used for namespacing all cluster resources."
+  TagName:
+    Type: String
+    Description: TagName
+    Default: cluster-asg
+  InstanceType:
+    Description: EC2 instance type
+    Type: String
+    Default: t3.medium
+    Description: Class of EC2 instance used to host containers.
+    AllowedValues: [ t3.micro, t3.small, t3.medium, t3.large, t3.xlarge ]
+    ConstraintDescription: Please choose a valid instance type.
+  DesiredCapacity:
+    Type: Number
+    Default: '3'
+    Description: Number of EC2 instances to launch in your ECS cluster.
+  MaxSize:
+    Type: Number
+    Default: '6'
+    Description: Maximum number of EC2 instances that can be launched in your ECS cluster.
+  ECSAMI:
+    Description: AMI ID
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ecs/optimized-ami/amazon-linux/recommended/image_id
+    Description: The Amazon Machine Image ID used for the cluster, leave it as the default value to get the latest AMI
+  ProxySQLECSServiceName:
+    Type: String
+    Description: ProxySQLECSServiceName
+    Default: proxy-sql
+  ProxySQLContainerImage:
+    Type: String
+    Description: Container Image, must be specified at stack creation
+  ProxySQLMemory:
+    Type: Number
+    Description: MemoryReservation for container
+    Default: 1024
+Conditions:
+  HasKeyName: !Not [!Equals [ !Ref KeyName, '' ]]
+  HasProxySQLImage: !Not [!Equals [ !Ref ProxySQLContainerImage, '' ]]
+
+Mappings:
+  # Hard values for the subnet masks. These masks define
+  # the range of internal IP addresses that can be assigned.
+  # The VPC can have all IP's from 10.0.0.0 to 10.0.255.255
+  # There are four subnets which cover the ranges:
+  #
+  # 10.0.0.0 - 10.0.0.255
+  # 10.0.1.0 - 10.0.1.255
+  # 10.0.2.0 - 10.0.2.255
+  # 10.0.3.0 - 10.0.3.255
+  #
+  # If you need more IP addresses (perhaps you have so many
+  # instances that you run out) then you can customize these
+  # ranges to add more
+  SubnetConfig:
+    VPC:
+      CIDR: '10.0.0.0/16'
+    PublicOne:
+      CIDR: '10.0.0.0/24'
+    PublicTwo:
+      CIDR: '10.0.1.0/24'
+    PrivateOne:
+      CIDR: '10.0.2.0/24'
+    PrivateTwo:
+      CIDR: '10.0.3.0/24'
+Resources:
+  # VPC in which containers will be networked.
+  # It has two public subnets, and two private subnets.
+  # We distribute the subnets across the first two available subnets
+  # for the region, for high availability.
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      CidrBlock: !FindInMap ['SubnetConfig', 'VPC', 'CIDR']
+
+  # Two public subnets, where containers can have public IP addresses
+  PublicSubnetOne:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone:
+         Fn::Select:
+         - 0
+         - Fn::GetAZs: {Ref: 'AWS::Region'}
+      VpcId: !Ref 'VPC'
+      CidrBlock: !FindInMap ['SubnetConfig', 'PublicOne', 'CIDR']
+      MapPublicIpOnLaunch: true
+  PublicSubnetTwo:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone:
+         Fn::Select:
+         - 1
+         - Fn::GetAZs: {Ref: 'AWS::Region'}
+      VpcId: !Ref 'VPC'
+      CidrBlock: !FindInMap ['SubnetConfig', 'PublicTwo', 'CIDR']
+      MapPublicIpOnLaunch: true
+
+  # Two private subnets where containers will only have private
+  # IP addresses, and will only be reachable by other members of the
+  # VPC
+  PrivateSubnetOne:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone:
+         Fn::Select:
+         - 0
+         - Fn::GetAZs: {Ref: 'AWS::Region'}
+      VpcId: !Ref 'VPC'
+      CidrBlock: !FindInMap ['SubnetConfig', 'PrivateOne', 'CIDR']
+  PrivateSubnetTwo:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone:
+         Fn::Select:
+         - 1
+         - Fn::GetAZs: {Ref: 'AWS::Region'}
+      VpcId: !Ref 'VPC'
+      CidrBlock: !FindInMap ['SubnetConfig', 'PrivateTwo', 'CIDR']
+
+  # Setup networking resources for the public subnets. Containers
+  # in the public subnets have public IP addresses and the routing table
+  # sends network traffic via the internet gateway.
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+  GatewayAttachement:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref 'VPC'
+      InternetGatewayId: !Ref 'InternetGateway'
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref 'VPC'
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachement
+    Properties:
+      RouteTableId: !Ref 'PublicRouteTable'
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId: !Ref 'InternetGateway'
+  PublicSubnetOneRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetOne
+      RouteTableId: !Ref PublicRouteTable
+  PublicSubnetTwoRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetTwo
+      RouteTableId: !Ref PublicRouteTable
+
+  # Setup networking resources for the private subnets. Containers
+  # in these subnets have only private IP addresses, and must use a NAT
+  # gateway to talk to the internet. We launch two NAT gateways, one for
+  # each private subnet.
+  NatGatewayOneAttachment:
+    Type: AWS::EC2::EIP
+    DependsOn: GatewayAttachement
+    Properties:
+        Domain: vpc
+  NatGatewayTwoAttachment:
+    Type: AWS::EC2::EIP
+    DependsOn: GatewayAttachement
+    Properties:
+        Domain: vpc
+  NatGatewayOne:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayOneAttachment.AllocationId
+      SubnetId: !Ref PublicSubnetOne
+  NatGatewayTwo:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayTwoAttachment.AllocationId
+      SubnetId: !Ref PublicSubnetTwo
+  PrivateRouteTableOne:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref 'VPC'
+  PrivateRouteOne:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableOne
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayOne
+  PrivateRouteTableOneAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableOne
+      SubnetId: !Ref PrivateSubnetOne
+  PrivateRouteTableTwo:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref 'VPC'
+  PrivateRouteTwo:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableTwo
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayTwo
+  PrivateRouteTableTwoAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableTwo
+      SubnetId: !Ref PrivateSubnetTwo
+
+  # ECS Resources
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Ref EnvironmentName
+  
+  # ECS Service for Proxy SQL
+  ProxySQLECSService:
+    Type: AWS::ECS::Service
+    DependsOn: ProxySQLECSTaskDefinition
+    Properties: 
+      Cluster: !Ref ECSCluster
+      DeploymentConfiguration: 
+          MaximumPercent: 200
+          MinimumHealthyPercent: 75
+      DesiredCount: 2
+      LaunchType: EC2
+      PlacementStrategies: 
+        - Type: spread
+          Field: attribute:ecs.availability-zone
+        - Type: binpack
+          Field: memory
+      SchedulingStrategy: REPLICA
+      ServiceName: !Sub ${EnvironmentName}-${ProxySQLECSServiceName}
+      Tags:
+        - Key: 'Name'
+          Value: !Sub ${EnvironmentName}-${ProxySQLECSServiceName}
+        - Key: 'Environment'
+          Value: !Ref 'EnvironmentName'
+      TaskDefinition: !Ref ProxySQLECSTaskDefinition
+
+  # ECS Task Definition for ProxySQL
+  ProxySQLECSTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    DependsOn: LogGroup
+    Properties: 
+      ContainerDefinitions: 
+        - Name: !Ref ProxySQLECSServiceName
+          Image: !Ref ProxySQLContainerImage
+          MemoryReservation: !Ref ProxySQLMemory
+          PortMappings:
+            -
+              ContainerPort: 6603
+              HostPort: 0
+              Protocol: tcp
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-region: !Ref AWS::Region
+              awslogs-group: !Ref LogGroup
+              awslogs-stream-prefix: ecs
+      Family: !Join ['', [!Ref ProxySQLECSServiceName, ProxySQLECSTaskDefinition]]
+      NetworkMode: bridge
+      RequiresCompatibilities: 
+        - EC2
+      Tags:
+        - Key: 'Name'
+          Value: !Sub '${EnvironmentName}-${ProxySQLECSServiceName}'
+        - Key: 'Environment'
+          Value: !Ref 'EnvironmentName'
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Join ['', [/ecs/, !Ref ProxySQLECSServiceName, ProxySQLECSTaskDefinition]]
+  # A security group for the EC2 hosts that will run the containers.
+  # Rules are added based on what ingress you choose to add to the cluster.
+  ContainerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Access to the ECS hosts that run containers
+      VpcId: !Ref 'VPC'
+
+  # Autoscaling group. This launches the actual EC2 instances that will register
+  # themselves as members of the cluster, and run the docker containers.
+  ECSAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - !Ref PrivateSubnetOne
+        - !Ref PrivateSubnetTwo
+      LaunchConfigurationName: !Ref 'ContainerInstances'
+      MinSize: '1'
+      MaxSize: !Ref 'MaxSize'
+      DesiredCapacity: !Ref 'DesiredCapacity'
+      Tags:
+        - Key: 'Name'
+          Value: !Sub ${EnvironmentName}-${TagName}
+          PropagateAtLaunch: true
+        - Key: 'Environment'
+          Value: !Ref 'EnvironmentName'
+          PropagateAtLaunch: true
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT15M
+    UpdatePolicy:
+      AutoScalingReplacingUpdate:
+        WillReplace: 'true'
+
+  ContainerInstances:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      KeyName: !If [HasKeyName, !Ref KeyName, !Ref "AWS::NoValue"]
+      SpotPrice: '0.0125'
+      ImageId: !Ref 'ECSAMI'
+      SecurityGroups: [!Ref 'ContainerSecurityGroup']
+      InstanceType: !Ref 'InstanceType'
+      IamInstanceProfile: !Ref 'EC2InstanceProfile'
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+          echo ECS_CLUSTER=${ECSCluster} >> /etc/ecs/ecs.config
+          yum install -y aws-cfn-bootstrap
+          /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource ECSAutoScalingGroup --region ${AWS::Region}
+          
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles: [!Ref 'EC2Role']
+
+  # Scale Out Policy
+  # Increase the instance count by 10% when the value of the metric is greater than or equal to 70% but less than 80%
+  # Increase the instance count by 20% when the value of the metric is greater than or equal to 80% but less than 90%
+  # Increase the instance count by 30% when the value of the metric is greater than or equal to 90%
+  AutoScaleOutPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: PercentChangeInCapacity
+      AutoScalingGroupName: !Ref ECSAutoScalingGroup
+      MetricAggregationType: Average
+      MinAdjustmentMagnitude: 1
+      PolicyType: StepScaling
+      StepAdjustments: 
+        - 
+          MetricIntervalLowerBound: "10"
+          MetricIntervalUpperBound: "20"
+          ScalingAdjustment: "10"
+        - 
+          MetricIntervalLowerBound: "20"
+          MetricIntervalUpperBound: "30"
+          ScalingAdjustment: "20"
+        - 
+          MetricIntervalLowerBound: "30"
+          ScalingAdjustment: "30"
+  
+  # Scale In Policy
+  # Decreases the capacity of the group by 2 instances
+  AutoScaleInPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      AutoScalingGroupName: !Ref ECSAutoScalingGroup
+      PolicyType: StepScaling
+      StepAdjustments: 
+        - 
+          MetricIntervalUpperBound: "0"
+          ScalingAdjustment: "-2"
+
+  ScaleOutAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 2
+      Period: 120
+      Statistic: Average
+      Threshold: 60
+      AlarmActions: 
+        - !Ref 'AutoScaleOutPolicy'
+      AlarmDescription: !Sub Alarm that triggers AutoScaleOutPolicy on ${EnvironmentName} Cluster
+      AlarmName: Step-ScalingOut-AlarmHigh-AddCapacity
+      Dimensions:
+        -
+          Name: AutoScalingGroupName
+          Value: !Ref ECSAutoScalingGroup
+
+  ScaleInAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      ComparisonOperator: LessThanOrEqualToThreshold
+      EvaluationPeriods: 2
+      Period: 120
+      Statistic: Average
+      Threshold: 40
+      AlarmActions: 
+        - !Ref 'AutoScaleInPolicy'
+      AlarmDescription: !Sub Alarm that triggers AutoScaleInPolicy on ${EnvironmentName} Cluster
+      AlarmName: Step-ScalingIn-AlarmLow-RemoveCapacity
+      Dimensions:
+        -
+          Name: AutoScalingGroupName
+          Value: !Ref ECSAutoScalingGroup
+
+  # A role used to allow AWS Autoscaling to inspect stats and adjust scaleable targets
+  # on your AWS account
+  AutoscalingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [application-autoscaling.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+      Policies:
+      - PolicyName: service-autoscaling
+        PolicyDocument:
+          Statement:
+          - Effect: Allow
+            Action:
+              - 'application-autoscaling:*'
+              - 'cloudwatch:DescribeAlarms'
+              - 'cloudwatch:PutMetricAlarm'
+              - 'ecs:DescribeServices'
+              - 'ecs:UpdateService'
+            Resource: '*'
+
+  # Role for the EC2 hosts. This allows the ECS agent on the EC2 hosts
+  # to communciate with the ECS control plane, as well as download the docker
+  # images from ECR to run on your host.
+  EC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [ec2.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+      Policies:
+      - PolicyName: ecs-service
+        PolicyDocument:
+          Statement:
+          - Effect: Allow
+            Action:
+              - 'ecs:CreateCluster'
+              - 'ecs:DeregisterContainerInstance'
+              - 'ecs:DiscoverPollEndpoint'
+              - 'ecs:Poll'
+              - 'ecs:RegisterContainerInstance'
+              - 'ecs:StartTelemetrySession'
+              - 'ecs:Submit*'
+              - 'logs:CreateLogStream'
+              - 'logs:PutLogEvents'
+              - 'ecr:GetAuthorizationToken'
+              - 'ecr:BatchGetImage'
+              - 'ecr:GetDownloadUrlForLayer'
+            Resource: '*'
+
+  # This is an IAM role which authorizes ECS to manage resources on your
+  # account on your behalf, such as updating your load balancer with the
+  # details of where your containers are, so that traffic can reach your
+  # containers.
+  ECSRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [ecs.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+      Policies:
+      - PolicyName: ecs-service
+        PolicyDocument:
+          Statement:
+          - Effect: Allow
+            Action:
+              # Rules which allow ECS to attach network interfaces to instances
+              # on your behalf in order for awsvpc networking mode to work right
+              - 'ec2:AttachNetworkInterface'
+              - 'ec2:CreateNetworkInterface'
+              - 'ec2:CreateNetworkInterfacePermission'
+              - 'ec2:DeleteNetworkInterface'
+              - 'ec2:DeleteNetworkInterfacePermission'
+              - 'ec2:Describe*'
+              - 'ec2:DetachNetworkInterface'
+
+              # Rules which allow ECS to update load balancers on your behalf
+              # with the information sabout how to send traffic to your containers
+              - 'elasticloadbalancing:DeregisterInstancesFromLoadBalancer'
+              - 'elasticloadbalancing:DeregisterTargets'
+              - 'elasticloadbalancing:Describe*'
+              - 'elasticloadbalancing:RegisterInstancesWithLoadBalancer'
+              - 'elasticloadbalancing:RegisterTargets'
+            Resource: '*'
+
+# These are the values output by the CloudFormation template. Be careful
+# about changing any of them, because of them are exported with specific
+# names so that the other task related CF templates can use them.
+Outputs:
+  ClusterName:
+    Description: The name of the ECS cluster
+    Value: !Ref 'ECSCluster'
+    Export:
+      Name: !Sub ${EnvironmentName}:ClusterName
+  AutoScaleOutPolicy:
+    Description: Name of Scale Out Policy
+    Value: !Ref 'AutoScaleOutPolicy'
+    Export:
+      Name: !Sub ${EnvironmentName}:AutoScaleOutPolicy
+  AutoScaleInPolicy:
+    Description: Name of Scale In Policy
+    Value: !Ref 'AutoScaleInPolicy'
+    Export:
+      Name: !Sub ${EnvironmentName}:AutoScaleInPolicy
+  ScaleOutAlarm:
+    Description: Name of Scale Out Alarm
+    Value: !Ref 'ScaleOutAlarm'
+    Export:
+      Name: !Sub ${EnvironmentName}:ScaleOutAlarm
+  ScaleInAlarm:
+    Description: Name of Scale In Policy
+    Value: !Ref 'ScaleInAlarm'
+    Export:
+      Name: !Sub ${EnvironmentName}:ScaleInAlarm
+  AutoscalingRole:
+    Description: The ARN of the role used for autoscaling
+    Value: !GetAtt 'AutoscalingRole.Arn'
+    Export:
+      Name: !Sub ${EnvironmentName}:AutoscalingRole
+  ECSRole:
+    Description: The ARN of the ECS role
+    Value: !GetAtt 'ECSRole.Arn'
+    Export:
+      Name: !Sub ${EnvironmentName}:ECSRole
+  VpcId:
+    Description: The ID of the VPC that this stack is deployed in
+    Value: !Ref 'VPC'
+    Export:
+      Name: !Sub ${EnvironmentName}:VpcId
+  PublicSubnetOne:
+    Description: Public subnet one
+    Value: !Ref 'PublicSubnetOne'
+    Export:
+      Name: !Sub ${EnvironmentName}:PublicSubnetOne
+  PublicSubnetTwo:
+    Description: Public subnet two
+    Value: !Ref 'PublicSubnetTwo'
+    Export:
+      Name: !Sub ${EnvironmentName}:PublicSubnetTwo
+  PrivateSubnetOne:
+    Description: Private subnet one
+    Value: !Ref 'PrivateSubnetOne'
+    Export:
+      Name: !Sub ${EnvironmentName}:PrivateSubnetOne
+  PrivateSubnetTwo:
+    Description: Private subnet two
+    Value: !Ref 'PrivateSubnetTwo'
+    Export:
+      Name: !Sub ${EnvironmentName}:PrivateSubnetTwo
+  ContainerSecurityGroup:
+    Description: A security group used to allow containers to receive traffic
+    Value: !Ref 'ContainerSecurityGroup'
+    Export:
+      Name: !Sub ${EnvironmentName}:ContainerSecurityGroup
