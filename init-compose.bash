@@ -9,7 +9,7 @@ __VERBOSE=${VAR:-6}
 
 logger 6 "$BRIGHT"
 logger 6 "##################################################################################\n"
-logger 6 "# Started ProxySQL for $DST_ENV environment!                                         #\n"
+logger 6 "# Started ProxySQL for $DST_ENV environment!                                     #\n"
 logger 6 "##################################################################################\n"
 logger 6 "$NORMAL"
 
@@ -19,13 +19,12 @@ if [ "$DST_ENV" = "local" ]; then
     logger 6 "$POWDER_BLUE Running Stack for $DST_ENV$POWDER_BLUE\n"
     docker-compose up -d
     logger 6 "$YELLOW Waiting write-sql to be created"
+    sleep 2
     RC=1
-    while [ $RC -eq 1 ]
+    until mysqladmin ping -h127.0.0.1 -P3306 -uroot -pmysql &> /dev/null
     do
-    sleep 1
-    logger 6 "."
-    mysqladmin ping -h127.0.0.1 -P3306 -uroot -pmysql > /dev/null 2>&1
-    RC=$?
+        printf "."
+        sleep 1
     done
     logger 6 "\n"
     mysql -h 127.0.0.1 -uradmin -pradmin -P 6032 < proxy-sql/local-config.sql
