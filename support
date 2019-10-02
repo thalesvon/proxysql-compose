@@ -40,3 +40,16 @@ function logger () {
     printf "$@"
   fi
 }
+
+function wait_db () {
+  local ADDRESS=${1}
+  local PORT=${2}
+  local USER=${3}
+  local PASS=${4}
+  until mysqladmin ping -h${ADDRESS} -P${PORT} -u${USER} -p${PASS} &> /dev/null
+    do
+        printf "."
+        sleep 1
+    done
+
+}

@@ -20,12 +20,7 @@ if [ "$DST_ENV" = "local" ]; then
     docker-compose up -d
     logger 6 "$YELLOW Waiting write-sql to be created"
     sleep 2
-    RC=1
-    until mysqladmin ping -h127.0.0.1 -P3306 -uroot -pmysql &> /dev/null
-    do
-        printf "."
-        sleep 1
-    done
+    wait_db 127.0.0.1 3306 root mysql
     logger 6 "\n"
     mysql -h 127.0.0.1 -uradmin -pradmin -P 6032 < proxy-sql/local-config.sql
 
@@ -53,11 +48,12 @@ elif [ "$DST_ENV" = "rds" ];then
     
     #docker-compose evaluates DST_ENV=rds to select proper config file, if DST_ENV is empty the default is local-config.sql
     export DST_ENV
-    docker-compose up --build proxy-sql
+    docker-compose up --build -d proxy-sql
+    wait_db 127.0.0.1 6032 radmin radmin
     mysql -h 127.0.0.1 -uradmin -pradmin -P 6032 < $CONFIG_FILE
-    docker-compose down
-    logger 7 "$(docker commit -m="ProxySQL for RDS with configuration from $CONFIG_FILE" $(docker ps -a -q -f name=proxy-sql) boomcredit/proxy-sql:latest)\n"
     
+    logger 7 "$(docker commit -m="ProxySQL for RDS with configuration from $CONFIG_FILE" $(docker ps -a -q -f name=proxy-sql) boomcredit/proxy-sql:latest)\n"
+    docker-compose down
     logger 6 "$GREEN Docker image boomcredit/proxy-sql:latest build locally$GREEN\n"
 
     logger 6 "$POWDER_BLUE Login to AWS ECR $POWDER_BLUE"
