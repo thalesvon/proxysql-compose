@@ -53,3 +53,15 @@ function wait_db () {
     done
 
 }
+
+function has_config () {
+  
+  if [ -f "./.secrets" ]
+  then
+    logger 6 "Loaded Config from ./.secrets\n"
+  else
+    logger 6 "$RED Please run ./init-compose.bash config before launching to RDS.$RED\n"
+    return 1
+  fi
+
+}

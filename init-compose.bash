@@ -14,8 +14,17 @@ logger 6 "######################################################################
 logger 6 "$NORMAL"
 
 
+if [ "$DST_ENV" = "config" ]; then
+    read -p 'RDS Cluster name: ' DB_CLUSTER
+    read -p 'DB Monitoring username: ' DB_USER
+    read -sp 'DB Monitoring password: ' DB_PASSWORD
 
-if [ "$DST_ENV" = "local" ]; then
+    echo DB_CLUSTER=$DB_CLUSTER > ./.secrets
+    echo DB_USER=$DB_USER >> ./.secrets
+    echo DB_PASSWORD=$DB_PASSWORD >> ./.secrets
+    logger 6 "\n"
+
+elif [ "$DST_ENV" = "local" ]; then
     logger 6 "$POWDER_BLUE Running Stack for $DST_ENV$POWDER_BLUE\n"
     docker-compose up -d
     logger 6 "$YELLOW Waiting write-sql to be created"
@@ -25,17 +34,16 @@ if [ "$DST_ENV" = "local" ]; then
     mysql -h 127.0.0.1 -uradmin -pradmin -P 6032 < proxy-sql/local-config.sql
 
 elif [ "$DST_ENV" = "rds" ];then 
+    has_config
+    . .secrets
     aws-check
     logger 6 "$POWDER_BLUE Running Stack for $DST_ENV$POWDER_BLUE\n"
     SAMPLE_CONFIG='proxy-sql/rds-sample-config.sql'
     CONFIG_FILE='proxy-sql/rds-config.sql'
-    DB_CLUSTER='boomcredit-dev-cluster'
     logger 6 "$GREEN Gathering endopints of $DB_CLUSTER$GREEN\n"
     WRITER_ENDPOINT=$(aws rds describe-db-clusters --db-cluster-identifier $DB_CLUSTER --query 'DBClusters[*].Endpoint' --output text)
     READER_ENDPOINT=$(aws rds describe-db-clusters --db-cluster-identifier $DB_CLUSTER --query 'DBClusters[*].ReaderEndpoint' --output text)
     DB_PORT=$(aws rds describe-db-clusters --db-cluster-identifier $DB_CLUSTER --query 'DBClusters[*].Port' --output text)
-    DB_USER='root'
-    DB_PASSWORD='F+gFkyjCFtG*7Cu-mNVd'
     logger 6 "$YELLOW RDS writer endopint: $WRITER_ENDPOINT:$DB_PORT$YELLOW\n"
     logger 6 "$YELLOW RDS reader endopint: $READER_ENDPOINT:$DB_PORT$YELLOW\n"
     logger 6 "$POWDER_BLUE Replacing $ENV variables on $SAMPLE_CONFIG$POWDER_BLUE\n"
@@ -46,6 +54,7 @@ elif [ "$DST_ENV" = "rds" ];then
         -e 's@{{ sql:user }}@'"$DB_USER"'@g' \
         -e 's@{{ sql:password }}@'"$DB_PASSWORD"'@g' $SAMPLE_CONFIG > $CONFIG_FILE
     
+    logger 6 "$POWDER_BLUE Configuring ProxySQL with $CONFIG_FILE"
     #docker-compose evaluates DST_ENV=rds to select proper config file, if DST_ENV is empty the default is local-config.sql
     export DST_ENV
     docker-compose up --build -d proxy-sql
@@ -70,8 +79,10 @@ elif [ "$DST_ENV" = "rds" ];then
 
 else
     printf "$RED Sorry invalid option...$RED\n"
+    printf "First run:\n"
+    printf "    ./init_compose.bash config\n\n"
     printf "Usage:\n"
-    printf "./init-compose.bash \$ENV \$LOG_LEVEL\n\n"
+    printf "    ./init-compose.bash \$ENV \$LOG_LEVEL\n\n"
     printf "ENV = local | rds\n"
     printf "LOG_LEVEL [0]=emerg [1]=alert [2]=crit [3]=err [4]=warning [5]=notice [6]=info [7]=debug\n\n"
 fi
