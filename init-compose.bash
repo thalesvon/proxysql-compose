@@ -57,20 +57,20 @@ elif [ "$DST_ENV" = "rds" ];then
     logger 6 "$POWDER_BLUE Configuring ProxySQL with $CONFIG_FILE"
     #docker-compose evaluates DST_ENV=rds to select proper config file, if DST_ENV is empty the default is local-config.sql
     export DST_ENV
-    docker-compose up --build -d proxy-sql
+    docker-compose up --build -d proxy-sql &> /dev/null
     wait_db 127.0.0.1 6032 radmin radmin
     mysql -h 127.0.0.1 -uradmin -pradmin -P 6032 < $CONFIG_FILE
     
     logger 7 "$(docker commit -m="ProxySQL for RDS with configuration from $CONFIG_FILE" $(docker ps -a -q -f name=proxy-sql) boomcredit/proxy-sql:latest)\n"
-    docker-compose down
+    docker-compose down &> /dev/null
     logger 6 "$GREEN Docker image boomcredit/proxy-sql:latest build locally$GREEN\n"
 
     logger 6 "$POWDER_BLUE Login to AWS ECR $POWDER_BLUE"
     $(aws ecr get-login --no-include-email)
 
     logger 6 "$POWDER_BLUE Pushing image to registry $POWDER_BLUE"
-    docker tag boomcredit/proxy-sql:latest 212568053769.dkr.ecr.us-east-1.amazonaws.com/boomcredit/proxy-sql:latest
-    docker push 212568053769.dkr.ecr.us-east-1.amazonaws.com/boomcredit/proxy-sql:latest
+    docker tag boomcredit/proxy-sql:latest 212568053769.dkr.ecr.us-east-1.amazonaws.com/boomcredit/proxy-sql:latest &> /dev/null
+    docker push 212568053769.dkr.ecr.us-east-1.amazonaws.com/boomcredit/proxy-sql:latest &> /dev/null
 
     #STACK_NAME='demo'
     #STACK_ARN=$(aws cloudformation update-stack --stack-name demo --template-body file://cloudformation/ecs-cluster.yml --capabilities CAPABILITY_IAM --parameters ParameterKey=ProxySQLContainerImage,ParameterValue=212568053769.dkr.ecr.us-east-1.amazonaws.com/boomcredit/proxy-sql:latest --output text)
