@@ -222,7 +222,78 @@ Resources:
     Properties:
       ClusterName: !Ref EnvironmentName
   
-  # ECS Service for Proxy SQL
+  ProxySQLECSServiceAutoScaling:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    DependsOn: ProxySQLECSService
+    Properties: 
+      MaxCapacity: 5
+      MinCapacity: 1
+      ResourceId: !Join ["/",[service, !Ref EnvironmentName, !GetAtt [ProxySQLECSService,Name]]]
+      RoleARN: !GetAtt [ AutoscalingRole, Arn]
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+
+  ProxySQLScaleOut:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    DependsOn: ProxySQLECSServiceAutoScaling
+    Properties:
+      PolicyName: ProxySQLPolicyOut
+      PolicyType: StepScaling
+      ScalingTargetId: !Ref "ProxySQLECSServiceAutoScaling"
+      StepScalingPolicyConfiguration:
+        Cooldown: 120
+        MetricAggregationType: "Average"
+        AdjustmentType: "ChangeInCapacity"
+        StepAdjustments:
+          - MetricIntervalLowerBound: 0
+            MetricIntervalUpperBound: 10
+            ScalingAdjustment: 2
+          - MetricIntervalLowerBound: 10
+            ScalingAdjustment: 4
+  
+  ProxySQLScaleIn:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    DependsOn: ProxySQLECSServiceAutoScaling
+    Properties:
+      PolicyName: ProxySQLPolicyIn
+      PolicyType: StepScaling
+      ScalingTargetId: !Ref "ProxySQLECSServiceAutoScaling"
+      StepScalingPolicyConfiguration:
+        Cooldown: 120
+        MetricAggregationType: "Average"
+        AdjustmentType: "ChangeInCapacity"
+        StepAdjustments:
+        - MetricIntervalUpperBound: -1
+          MetricIntervalLowerBound: -10
+          ScalingAdjustment: -1
+        - MetricIntervalUpperBound: -10
+          ScalingAdjustment: -2     
+  
+  ProxySQLAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      MetricName: CPUUtilization
+      Namespace: AWS/ECS
+      ComparisonOperator: GreaterThanThreshold
+      EvaluationPeriods: 2
+      Period: 120
+      Statistic: Average
+      Threshold: 60
+      AlarmActions: 
+        - !Ref 'ProxySQLScaleOut'
+        - !Ref 'ProxySQLScaleIn'
+      OKActions:
+        - !Ref 'ProxySQLScaleOut'
+        - !Ref 'ProxySQLScaleIn'
+      AlarmDescription: !Sub Alarm that triggers ProxySQLScaleOut on ${EnvironmentName} Cluster
+      AlarmName: Add-Tasks
+      Dimensions:
+        - Name: ClusterName
+          Value: !Ref EnvironmentName
+        - Name: ServiceName
+          Value: !Sub ${EnvironmentName}-${ProxySQLECSServiceName}
+
+  # ECS Service for Proxy SQL  
   ProxySQLECSService:
     Type: AWS::ECS::Service
     DependsOn: ProxySQLECSTaskDefinition
@@ -378,11 +449,11 @@ Resources:
   ScaleOutAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      MetricName: CPUUtilization
-      Namespace: AWS/EC2
+      MetricName: MemoryReservation
+      Namespace: AWS/ECS
       ComparisonOperator: GreaterThanOrEqualToThreshold
       EvaluationPeriods: 2
-      Period: 120
+      Period: 60
       Statistic: Average
       Threshold: 60
       AlarmActions: 
@@ -391,27 +462,27 @@ Resources:
       AlarmName: Step-ScalingOut-AlarmHigh-AddCapacity
       Dimensions:
         -
-          Name: AutoScalingGroupName
-          Value: !Ref ECSAutoScalingGroup
+          Name: ClusterName
+          Value: !Sub ${EnvironmentName}
 
   ScaleInAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      MetricName: CPUUtilization
-      Namespace: AWS/EC2
+      MetricName: MemoryReservation
+      Namespace: AWS/ECS
       ComparisonOperator: LessThanOrEqualToThreshold
       EvaluationPeriods: 2
-      Period: 120
+      Period: 60
       Statistic: Average
-      Threshold: 40
+      Threshold: 50
       AlarmActions: 
         - !Ref 'AutoScaleInPolicy'
       AlarmDescription: !Sub Alarm that triggers AutoScaleInPolicy on ${EnvironmentName} Cluster
       AlarmName: Step-ScalingIn-AlarmLow-RemoveCapacity
       Dimensions:
         -
-          Name: AutoScalingGroupName
-          Value: !Ref ECSAutoScalingGroup
+          Name: ClusterName
+          Value: !Sub ${EnvironmentName}
 
   # A role used to allow AWS Autoscaling to inspect stats and adjust scaleable targets
   # on your AWS account
