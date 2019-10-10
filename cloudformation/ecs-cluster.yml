@@ -242,7 +242,7 @@ Resources:
       ScalingTargetId: !Ref "ProxySQLECSServiceAutoScaling"
       StepScalingPolicyConfiguration:
         Cooldown: 120
-        MetricAggregationType: "Average"
+        MetricAggregationType: "Maximum"
         AdjustmentType: "ChangeInCapacity"
         StepAdjustments:
           - MetricIntervalLowerBound: 0
@@ -260,7 +260,7 @@ Resources:
       ScalingTargetId: !Ref "ProxySQLECSServiceAutoScaling"
       StepScalingPolicyConfiguration:
         Cooldown: 120
-        MetricAggregationType: "Average"
+        MetricAggregationType: "Maximum"
         AdjustmentType: "ChangeInCapacity"
         StepAdjustments:
         - MetricIntervalUpperBound: -1
@@ -286,7 +286,7 @@ Resources:
         - !Ref 'ProxySQLScaleOut'
         - !Ref 'ProxySQLScaleIn'
       AlarmDescription: !Sub Alarm that triggers ProxySQLScaleOut on ${EnvironmentName} Cluster
-      AlarmName: Add-Tasks
+      AlarmName: !Sub ${ProxySQLECSServiceName}-Add-Remove-Tasks
       Dimensions:
         - Name: ClusterName
           Value: !Ref EnvironmentName
@@ -365,6 +365,7 @@ Resources:
   ECSAutoScalingGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
     Properties:
+      Cooldown: 1200
       VPCZoneIdentifier:
         - !Ref PrivateSubnetOne
         - !Ref PrivateSubnetTwo
@@ -401,7 +402,69 @@ Resources:
           echo ECS_CLUSTER=${ECSCluster} >> /etc/ecs/ecs.config
           yum install -y aws-cfn-bootstrap
           /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource ECSAutoScalingGroup --region ${AWS::Region}
+
+          yum -y install jq wget
+          easy_install pip
+          pip install awscli
+          aws configure set default.region ${AWS::Region}
+
+          wget https://s3.us-east-1.amazonaws.com/amazoncloudwatch-agent-us-east-1/amazon_linux/amd64/latest/amazon-cloudwatch-agent.rpm
+          rpm -U ./amazon-cloudwatch-agent.rpm
           
+          # Listing services on cluster
+          aws ecs list-services --cluster ${ECSCluster} --query 'serviceArns[*]' | jq -r '.[]' > /opt/cluster-services
+
+          # Creating cloudwatch agent config file
+          rm -f /opt/aws/amazon-cloudwatch-agent/bin/config.json
+          cat <<EOF > /opt/aws/amazon-cloudwatch-agent/bin/config.json
+          {
+            "agent": {
+              "run_as_user": "root"
+            },
+            "logs": {
+              "logs_collected": {
+                "files": {
+                  "collect_list": [
+                    {
+                      "file_path": "/var/log/nginx/access.log",
+                      "log_group_name": "/ecs/service/",
+                      "log_stream_name": "{instance_id}"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+          EOF
+
+          cat <<EOF > /etc/init/ecs-service-task-counter.conf
+          description "Updates Task count for a given ECS Service on CloudWatch"
+          author "Thales Sperling"
+          start on runlevel [2345]
+          script
+            echo \$\$ > /var/run/ecs-service-task-counter.pid
+            exec /usr/local/bin/ecs-service-task-counter.sh
+          end script
+          pre-start script
+            logger "$0 started at `date`"
+          end script
+          pre-stop script
+            rm /var/run/ecs-service-task-counter.pid
+            logger "$0 stopped at `date`"
+          end script
+          EOF
+          
+          cat <<EOF > /usr/local/bin/ecs-service-task-counter.sh
+          #!/bin/bash
+          while sleep 60; do
+          ECS_CLUSTER=\$(curl -s http://localhost:51678/v1/metadata | jq .Cluster | tr -d \")
+            while read SERVICE; do
+              echo "$SERVICE"
+              $(aws ecs describe-services --cluster \$ECS_CLUSTER --services \$SERVICE --query 'services[*].runningCount' --output text)
+            done < /opt/cluster-services
+          done
+          EOF
+
   EC2InstanceProfile:
     Type: AWS::IAM::InstanceProfile
     Properties:
@@ -446,39 +509,24 @@ Resources:
           MetricIntervalUpperBound: "0"
           ScalingAdjustment: "-2"
 
-  ScaleOutAlarm:
+  ECSClusterScalingAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
       MetricName: MemoryReservation
       Namespace: AWS/ECS
-      ComparisonOperator: GreaterThanOrEqualToThreshold
+      ComparisonOperator: GreaterThanThreshold
       EvaluationPeriods: 2
       Period: 60
       Statistic: Average
       Threshold: 60
       AlarmActions: 
         - !Ref 'AutoScaleOutPolicy'
-      AlarmDescription: !Sub Alarm that triggers AutoScaleOutPolicy on ${EnvironmentName} Cluster
-      AlarmName: Step-ScalingOut-AlarmHigh-AddCapacity
-      Dimensions:
-        -
-          Name: ClusterName
-          Value: !Sub ${EnvironmentName}
-
-  ScaleInAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      MetricName: MemoryReservation
-      Namespace: AWS/ECS
-      ComparisonOperator: LessThanOrEqualToThreshold
-      EvaluationPeriods: 2
-      Period: 60
-      Statistic: Average
-      Threshold: 50
-      AlarmActions: 
         - !Ref 'AutoScaleInPolicy'
-      AlarmDescription: !Sub Alarm that triggers AutoScaleInPolicy on ${EnvironmentName} Cluster
-      AlarmName: Step-ScalingIn-AlarmLow-RemoveCapacity
+      OKActions:
+        - !Ref 'AutoScaleOutPolicy'
+        - !Ref 'AutoScaleInPolicy'
+      AlarmDescription: !Sub Alarm that triggers AutoScaleOutPolicy and AutoScalingInPolicy on ${EnvironmentName} Cluster
+      AlarmName: Step-Scaling-Change-Capacity
       Dimensions:
         -
           Name: ClusterName
@@ -600,16 +648,11 @@ Outputs:
     Value: !Ref 'AutoScaleInPolicy'
     Export:
       Name: !Sub ${EnvironmentName}:AutoScaleInPolicy
-  ScaleOutAlarm:
-    Description: Name of Scale Out Alarm
-    Value: !Ref 'ScaleOutAlarm'
+  ECSClusterScalingAlarm:
+    Description: Name of ECS Scale Alarm
+    Value: !Ref 'ECSClusterScalingAlarm'
     Export:
       Name: !Sub ${EnvironmentName}:ScaleOutAlarm
-  ScaleInAlarm:
-    Description: Name of Scale In Policy
-    Value: !Ref 'ScaleInAlarm'
-    Export:
-      Name: !Sub ${EnvironmentName}:ScaleInAlarm
   AutoscalingRole:
     Description: The ARN of the role used for autoscaling
     Value: !GetAtt 'AutoscalingRole.Arn'
