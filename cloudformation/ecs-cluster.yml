@@ -272,12 +272,42 @@ Resources:
   ProxySQLAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      MetricName: CPUUtilization
-      Namespace: AWS/ECS
+      Metrics:
+        -
+          Id: m1
+          Label: ClusterRelativeCPU
+          MetricStat:
+            Metric: 
+              Namespace: AWS/ECS
+              MetricName: CPUUtilization
+              Period: 120
+              Stat: Average
+              ReturnData: false
+              Dimensions:
+                - Name: ClusterName
+                  Value: !Ref EnvironmentName
+                - Name: ServiceName
+                  Value: !Sub ${EnvironmentName}-${ProxySQLECSServiceName}
+        -
+          Id: m2
+          Label: ServiceCount
+          MetricStat:
+            Metric:
+              Namespace: custom/autoscaling
+              MetricName: demo-running-count
+              Period: 120
+              Stat: Average
+              ReturnData: false
+              Dimensions:
+                - Name: ServiceName
+                  Value: !Sub ${EnvironmentName}-${ProxySQLECSServiceName} 
+        -
+          Id: e1
+          Label: ServiceCPU
+          Expression: '(m1*m2)'
+
       ComparisonOperator: GreaterThanThreshold
       EvaluationPeriods: 2
-      Period: 120
-      Statistic: Average
       Threshold: 60
       AlarmActions: 
         - !Ref 'ProxySQLScaleOut'
@@ -287,11 +317,6 @@ Resources:
         - !Ref 'ProxySQLScaleIn'
       AlarmDescription: !Sub Alarm that triggers ProxySQLScaleOut on ${EnvironmentName} Cluster
       AlarmName: !Sub ${ProxySQLECSServiceName}-Add-Remove-Tasks
-      Dimensions:
-        - Name: ClusterName
-          Value: !Ref EnvironmentName
-        - Name: ServiceName
-          Value: !Sub ${EnvironmentName}-${ProxySQLECSServiceName}
 
   # ECS Service for Proxy SQL  
   ProxySQLECSService:
